@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from wordcloud import WordCloud
 import re
 import os
 from datetime import datetime
 from textblob import TextBlob
-import spacy
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.preprocessing import LabelEncoder
@@ -17,6 +15,7 @@ import plotly.graph_objects as go
 from collections import Counter
 import warnings
 import io
+from PIL import Image
 warnings.filterwarnings('ignore')
 
 # Set page configuration
@@ -30,7 +29,6 @@ st.set_page_config(
 class ComplaintAnalyzer:
     def __init__(self):
         self.excel_file = "complaints.xlsx"
-        self.wordcloud_file = "complaint_cloud.png"
         self.model_file = "complaint_classifier.pkl"
         self.vectorizer_file = "tfidf_vectorizer.pkl"
         self.label_encoder_file = "label_encoder.pkl"
@@ -221,50 +219,47 @@ class ComplaintAnalyzer:
         return df
 
     def generate_wordcloud(self, df):
-        """Generate word cloud from all complaints"""
+        """Generate word cloud from all complaints WITHOUT MATPLOTLIB"""
         if df.empty:
-            # Create empty word cloud
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.text(0.5, 0.5, 'No complaints yet', 
-                   horizontalalignment='center', verticalalignment='center',
-                   transform=ax.transAxes, fontsize=16)
-            ax.axis('off')
-            plt.savefig(self.wordcloud_file, bbox_inches='tight', dpi=300, 
-                       facecolor='white', transparent=False)
-            plt.close()
-            return
+            # Create a simple placeholder image using PIL
+            img = Image.new('RGB', (800, 400), color='white')
+            return img
         
         # Combine all complaint texts
         text = ' '.join(df['Complaint_Text'].astype(str))
         
         if not text.strip():
-            return
+            img = Image.new('RGB', (800, 400), color='white')
+            return img
         
-        # Generate word cloud
-        wordcloud = WordCloud(
-            width=800,
-            height=400,
-            background_color='white',
-            colormap='viridis',
-            max_words=100,
-            contour_width=1,
-            contour_color='steelblue'
-        ).generate(text)
-        
-        # Plot and save
-        plt.figure(figsize=(10, 5))
-        plt.imshow(wordcloud, interpolation='bilinear')
-        plt.axis('off')
-        plt.title('Most Frequent Complaint Topics', fontsize=16, pad=20)
-        plt.tight_layout()
-        plt.savefig(self.wordcloud_file, bbox_inches='tight', dpi=300, 
-                   facecolor='white', transparent=False)
-        plt.close()
+        try:
+            # Generate word cloud
+            wordcloud = WordCloud(
+                width=800,
+                height=400,
+                background_color='white',
+                max_words=100,
+                contour_width=1,
+                contour_color='steelblue'
+            ).generate(text)
+            
+            # Convert to PIL Image
+            img = Image.fromarray(wordcloud.to_array())
+            return img
+            
+        except Exception as e:
+            st.warning(f"Word cloud generation failed: {e}")
+            # Return placeholder image
+            img = Image.new('RGB', (800, 400), color='white')
+            return img
 
     def load_complaints(self):
         """Load all complaints from Excel file"""
         if os.path.exists(self.excel_file):
-            return pd.read_excel(self.excel_file)
+            try:
+                return pd.read_excel(self.excel_file)
+            except:
+                return pd.DataFrame()
         else:
             return pd.DataFrame()
 
@@ -361,9 +356,6 @@ def render_complaint_submission(analyzer, complaints_df):
                     location
                 )
                 
-                # Generate updated word cloud
-                analyzer.generate_wordcloud(updated_df)
-                
                 # Display results
                 st.success("✅ Complaint submitted successfully!")
                 
@@ -412,10 +404,6 @@ def process_batch_complaints(analyzer, batch_df):
         progress = (i + 1) / total_count
         progress_bar.progress(progress)
         status_text.text(f"Processed {i+1}/{total_count} complaints")
-    
-    # Generate final word cloud
-    updated_df = analyzer.load_complaints()
-    analyzer.generate_wordcloud(updated_df)
     
     st.success(f"✅ Successfully processed {successful_count} out of {total_count} complaints!")
 
@@ -500,7 +488,7 @@ def render_analytics_dashboard(analyzer, complaints_df):
         return
     
     # Generate word cloud
-    analyzer.generate_wordcloud(complaints_df)
+    wordcloud_img = analyzer.generate_wordcloud(complaints_df)
     
     # Layout for charts
     col1, col2 = st.columns(2)
@@ -531,10 +519,7 @@ def render_analytics_dashboard(analyzer, complaints_df):
     with col2:
         # Display word cloud
         st.subheader("Word Cloud - Most Frequent Issues")
-        if os.path.exists(analyzer.wordcloud_file):
-            st.image(analyzer.wordcloud_file, use_column_width=True)
-        else:
-            st.info("Word cloud will be generated after first complaint")
+        st.image(wordcloud_img, use_column_width=True)
         
         # Recent complaints trend
         st.subheader("Recent Complaints Trend")
@@ -607,18 +592,22 @@ def render_download_section(analyzer, complaints_df):
     
     with col2:
         st.subheader("Download Word Cloud")
-        if os.path.exists(analyzer.wordcloud_file):
-            with open(analyzer.wordcloud_file, "rb") as file:
-                image_data = file.read()
+        if not complaints_df.empty:
+            wordcloud_img = analyzer.generate_wordcloud(complaints_df)
+            
+            # Convert PIL Image to bytes for download
+            img_buffer = io.BytesIO()
+            wordcloud_img.save(img_buffer, format='PNG')
+            img_data = img_buffer.getvalue()
             
             st.download_button(
                 label="🖼️ Download Word Cloud",
-                data=image_data,
+                data=img_data,
                 file_name="complaint_wordcloud.png",
                 mime="image/png",
                 help="Download the current word cloud image"
             )
-            st.image(analyzer.wordcloud_file, use_column_width=True)
+            st.image(wordcloud_img, use_column_width=True)
         else:
             st.info("Word cloud will be available after first complaint")
 
