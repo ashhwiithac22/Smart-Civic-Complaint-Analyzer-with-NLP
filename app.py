@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from wordcloud import WordCloud
 import re
 import os
 from datetime import datetime
@@ -15,7 +14,8 @@ import plotly.graph_objects as go
 from collections import Counter
 import warnings
 import io
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
+import random
 warnings.filterwarnings('ignore')
 
 # Set page configuration
@@ -219,10 +219,17 @@ class ComplaintAnalyzer:
         return df
 
     def generate_wordcloud(self, df):
-        """Generate word cloud from all complaints WITHOUT MATPLOTLIB"""
+        """Generate word cloud from all complaints using PIL (no wordcloud library)"""
         if df.empty:
-            # Create a simple placeholder image using PIL
+            # Create a simple placeholder image
             img = Image.new('RGB', (800, 400), color='white')
+            draw = ImageDraw.Draw(img)
+            # Try to use a default font, or use None if not available
+            try:
+                font = ImageFont.load_default()
+                draw.text((400, 200), "No complaints yet", fill="black", font=font, anchor="mm")
+            except:
+                draw.text((400, 200), "No complaints yet", fill="black", anchor="mm")
             return img
         
         # Combine all complaint texts
@@ -233,18 +240,91 @@ class ComplaintAnalyzer:
             return img
         
         try:
-            # Generate word cloud
-            wordcloud = WordCloud(
-                width=800,
-                height=400,
-                background_color='white',
-                max_words=100,
-                contour_width=1,
-                contour_color='steelblue'
-            ).generate(text)
+            # Preprocess text
+            words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
             
-            # Convert to PIL Image
-            img = Image.fromarray(wordcloud.to_array())
+            # Remove common stop words
+            stop_words = {'the', 'and', 'is', 'in', 'it', 'to', 'of', 'for', 'with', 'on', 'at', 'by', 'this', 'that', 'are', 'as', 'be', 'was', 'were', 'has', 'have', 'had', 'but', 'not', 'we', 'they', 'you', 'i', 'he', 'she', 'his', 'her', 'our', 'my', 'your', 'their', 'its'}
+            filtered_words = [word for word in words if word not in stop_words]
+            
+            # Count word frequencies
+            word_freq = Counter(filtered_words)
+            top_words = word_freq.most_common(50)  # Get top 50 words
+            
+            if not top_words:
+                img = Image.new('RGB', (800, 400), color='white')
+                return img
+            
+            # Create image
+            img_width, img_height = 800, 400
+            img = Image.new('RGB', (img_width, img_height), color='white')
+            draw = ImageDraw.Draw(img)
+            
+            # Colors for different word sizes
+            colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
+                     '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+            
+            # Calculate font sizes based on frequency
+            max_freq = max(freq for _, freq in top_words)
+            min_freq = min(freq for _, freq in top_words)
+            
+            positions_used = []
+            
+            for word, freq in top_words[:30]:  # Use top 30 words for clarity
+                # Calculate font size based on frequency (scaled)
+                if max_freq == min_freq:
+                    font_size = 24
+                else:
+                    font_size = int(16 + (freq - min_freq) / (max_freq - min_freq) * 32)
+                
+                # Try to use a font, fall back to default
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except:
+                    try:
+                        font = ImageFont.load_default()
+                    except:
+                        font = None
+                
+                # Get text size
+                if font:
+                    bbox = draw.textbbox((0, 0), word, font=font)
+                    text_width = bbox[2] - bbox[0]
+                    text_height = bbox[3] - bbox[1]
+                else:
+                    text_width = len(word) * font_size * 0.6
+                    text_height = font_size
+                
+                # Try to find a position that doesn't overlap
+                max_attempts = 100
+                for attempt in range(max_attempts):
+                    x = random.randint(0, max(1, img_width - int(text_width)))
+                    y = random.randint(0, max(1, img_height - int(text_height)))
+                    
+                    # Check for overlap
+                    overlap = False
+                    for (px, py, pwidth, pheight) in positions_used:
+                        if (x < px + pwidth and x + text_width > px and
+                            y < py + pheight and y + text_height > py):
+                            overlap = True
+                            break
+                    
+                    if not overlap:
+                        positions_used.append((x, y, text_width, text_height))
+                        break
+                else:
+                    # If no position found, skip this word
+                    continue
+                
+                # Choose color
+                color = random.choice(colors)
+                
+                # Draw the text
+                if font:
+                    draw.text((x, y), word, fill=color, font=font)
+                else:
+                    draw.text((x, y), word, fill=color)
+            
             return img
             
         except Exception as e:
