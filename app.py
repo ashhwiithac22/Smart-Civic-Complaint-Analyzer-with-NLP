@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import re
 import os
+import base64
+import zipfile
 from datetime import datetime
 from textblob import TextBlob
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -32,10 +34,14 @@ st.set_page_config(
 class ComplaintAnalyzer:
     def __init__(self):
         self.excel_file = "complaints.xlsx"
-        self.csv_file = "complaints.csv"  # Added CSV for better persistence
+        self.csv_file = "complaints.csv"
+        self.photos_dir = "complaint_photos"
         self.model_file = "complaint_classifier.pkl"
         self.vectorizer_file = "tfidf_vectorizer.pkl"
         self.label_encoder_file = "label_encoder.pkl"
+        
+        # Create photos directory if it doesn't exist
+        os.makedirs(self.photos_dir, exist_ok=True)
         
         # Initialize or load models
         self.initialize_models()
@@ -188,9 +194,74 @@ class ComplaintAnalyzer:
         
         return ', '.join(set(locations[:3]))  # Return unique locations, max 3
 
+    def save_uploaded_photo(self, uploaded_file, complaint_id):
+        """Save uploaded photo and return filename"""
+        if uploaded_file is not None:
+            # Generate unique filename
+            file_extension = uploaded_file.name.split('.')[-1].lower()
+            filename = f"complaint_{complaint_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{file_extension}"
+            file_path = os.path.join(self.photos_dir, filename)
+            
+            # Save the file
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            
+            return filename
+        return None
+
+    def get_photo_preview(self, photo_filename, width=300):
+        """Get photo preview for display with proper error handling"""
+        try:
+            # Handle NaN values and ensure it's a string
+            if pd.isna(photo_filename) or not isinstance(photo_filename, str):
+                return None
+            
+            # Check if it's "No Photo" or empty
+            if photo_filename in ["No Photo", "", "nan", "None"]:
+                return None
+            
+            file_path = os.path.join(self.photos_dir, photo_filename)
+            
+            if os.path.exists(file_path):
+                image = Image.open(file_path)
+                # Resize for preview while maintaining aspect ratio
+                image.thumbnail((width, width))
+                return image
+            else:
+                return None
+        except Exception as e:
+            return None
+
+    def get_all_photos(self):
+        """Get all photos from the photos directory"""
+        try:
+            photos = []
+            for filename in os.listdir(self.photos_dir):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                    photos.append(filename)
+            return sorted(photos)
+        except:
+            return []
+
+    def create_photos_zip(self):
+        """Create a zip file of all complaint photos"""
+        try:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for filename in self.get_all_photos():
+                    file_path = os.path.join(self.photos_dir, filename)
+                    if os.path.exists(file_path):
+                        zip_file.write(file_path, filename)
+            
+            zip_buffer.seek(0)
+            return zip_buffer.getvalue()
+        except Exception as e:
+            return None
+
     def initialize_data_files(self):
         """Initialize data files if they don't exist"""
-        columns = ['Timestamp', 'Username', 'Complaint_Text', 'Category', 'Urgency', 'Location_Keywords']
+        columns = ['Complaint_ID', 'Timestamp', 'Username', 'Complaint_Text', 
+                  'Category', 'Urgency', 'Location_Keywords', 'Photo_Filename']
         
         # Initialize Excel file
         if not os.path.exists(self.excel_file):
@@ -202,34 +273,51 @@ class ComplaintAnalyzer:
             df = pd.DataFrame(columns=columns)
             df.to_csv(self.csv_file, index=False)
 
-    def save_complaint(self, username, complaint_text, category, urgency, location):
+    def generate_complaint_id(self):
+        """Generate unique complaint ID"""
+        return f"COMP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{random.randint(1000, 9999)}"
+
+    def save_complaint(self, username, complaint_text, category, urgency, location, photo_filename):
         """Save complaint to both CSV and Excel files for persistence"""
         self.initialize_data_files()
         
         # Try to load existing data from CSV first
         try:
             df = pd.read_csv(self.csv_file)
-            # Ensure Timestamp is datetime
+            # Ensure Timestamp is datetime and handle missing columns
             if not df.empty and 'Timestamp' in df.columns:
                 df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+            
+            # Handle missing Photo_Filename column in old data
+            if 'Photo_Filename' not in df.columns:
+                df['Photo_Filename'] = "No Photo"
+                
         except:
             # If CSV fails, try Excel
             try:
                 df = pd.read_excel(self.excel_file)
+                # Handle missing Photo_Filename column in old data
+                if 'Photo_Filename' not in df.columns:
+                    df['Photo_Filename'] = "No Photo"
             except:
                 df = pd.DataFrame(columns=[
-                    'Timestamp', 'Username', 'Complaint_Text', 
-                    'Category', 'Urgency', 'Location_Keywords'
+                    'Complaint_ID', 'Timestamp', 'Username', 'Complaint_Text', 
+                    'Category', 'Urgency', 'Location_Keywords', 'Photo_Filename'
                 ])
+        
+        # Generate complaint ID
+        complaint_id = self.generate_complaint_id()
         
         # Create new row
         new_row = {
+            'Complaint_ID': complaint_id,
             'Timestamp': datetime.now(),
             'Username': username,
             'Complaint_Text': complaint_text,
             'Category': category,
             'Urgency': urgency,
-            'Location_Keywords': location
+            'Location_Keywords': location,
+            'Photo_Filename': photo_filename if photo_filename else "No Photo"
         }
         
         # Append new row
@@ -239,7 +327,7 @@ class ComplaintAnalyzer:
         df.to_csv(self.csv_file, index=False)
         df.to_excel(self.excel_file, index=False)
         
-        return df
+        return df, complaint_id
 
     def load_complaints(self):
         """Load all complaints from CSV file with fallback to Excel"""
@@ -250,10 +338,25 @@ class ComplaintAnalyzer:
                 # Convert Timestamp string to datetime
                 if not df.empty and 'Timestamp' in df.columns:
                     df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+                
+                # Handle missing Photo_Filename column in old data
+                if 'Photo_Filename' not in df.columns:
+                    df['Photo_Filename'] = "No Photo"
+                else:
+                    # Clean up any NaN values in Photo_Filename
+                    df['Photo_Filename'] = df['Photo_Filename'].fillna("No Photo")
+                    
                 return df
             # Fallback to Excel
             elif os.path.exists(self.excel_file):
                 df = pd.read_excel(self.excel_file)
+                # Handle missing Photo_Filename column in old data
+                if 'Photo_Filename' not in df.columns:
+                    df['Photo_Filename'] = "No Photo"
+                else:
+                    # Clean up any NaN values in Photo_Filename
+                    df['Photo_Filename'] = df['Photo_Filename'].fillna("No Photo")
+                    
                 # Save to CSV for future use
                 df.to_csv(self.csv_file, index=False)
                 return df
@@ -442,7 +545,7 @@ def main():
     st.sidebar.title("Navigation")
     app_mode = st.sidebar.selectbox(
         "Choose a section",
-        ["Submit Complaint", "View All Complaints", "Analytics Dashboard", "Model Performance", "Download Data"]
+        ["Submit Complaint", "View All Complaints", "Analytics Dashboard", "Photo Gallery", "Model Performance", "Download Data"]
     )
     
     # Load existing complaints
@@ -452,10 +555,13 @@ def main():
         render_complaint_submission(analyzer, complaints_df)
     
     elif app_mode == "View All Complaints":
-        render_complaint_view(complaints_df)
+        render_complaint_view(analyzer, complaints_df)
     
     elif app_mode == "Analytics Dashboard":
         render_analytics_dashboard(analyzer, complaints_df)
+    
+    elif app_mode == "Photo Gallery":
+        render_photo_gallery(analyzer, complaints_df)
     
     elif app_mode == "Model Performance":
         render_model_performance(analyzer, complaints_df)
@@ -477,6 +583,18 @@ def render_complaint_submission(analyzer, complaints_df):
             height=150
         )
         
+        # Photo upload section
+        st.subheader("📷 Upload Complaint Photo (Optional)")
+        uploaded_photo = st.file_uploader(
+            "Add visual evidence of the issue", 
+            type=['jpg', 'jpeg', 'png', 'gif'],
+            help="Upload a photo showing the problem for better understanding"
+        )
+        
+        if uploaded_photo is not None:
+            # Display photo preview
+            st.image(uploaded_photo, caption="📸 Photo Preview", width=300)
+        
         # Batch upload option
         st.subheader("📁 Batch Upload (Optional)")
         uploaded_file = st.file_uploader("Upload CSV file with multiple complaints", type=['csv'])
@@ -493,9 +611,10 @@ def render_complaint_submission(analyzer, complaints_df):
         st.subheader("💡 Tips for Effective Complaints")
         st.markdown("""
         - Be specific about location
-        - Mention urgency clearly
+        - Mention urgency clearly  
         - Describe the issue in detail
         - Include relevant landmarks
+        - **Add photos for better context**
         """)
         
         st.subheader("🚨 Emergency Keywords")
@@ -504,6 +623,15 @@ def render_complaint_submission(analyzer, complaints_df):
         - Emergency, Urgent, Critical
         - Burst, Flood, Fire
         - Hazard, Danger, Accident
+        """)
+        
+        st.subheader("📸 Photo Guidelines")
+        st.markdown("""
+        - Clear, well-lit photos work best
+        - Show the problem area clearly
+        - Include landmarks if possible
+        - Maximum file size: 5MB
+        - Supported formats: JPG, PNG, GIF
         """)
     
     # Process single complaint
@@ -515,28 +643,96 @@ def render_complaint_submission(analyzer, complaints_df):
                 urgency = analyzer.detect_urgency(complaint_text)
                 location = analyzer.extract_location_keywords(complaint_text)
                 
-                # Save complaint
-                updated_df = analyzer.save_complaint(
+                # Save photo if uploaded
+                photo_filename = None
+                if uploaded_photo is not None:
+                    # Generate temporary ID for photo naming
+                    temp_id = f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    photo_filename = analyzer.save_uploaded_photo(uploaded_photo, temp_id)
+                
+                # Save complaint (will get actual ID during save)
+                updated_df, complaint_id = analyzer.save_complaint(
                     username if username else "Anonymous",
                     complaint_text,
                     category,
                     urgency,
-                    location
+                    location,
+                    photo_filename
                 )
+                
+                # If photo was saved with temp ID, rename it with actual complaint ID
+                if photo_filename and "temp_" in photo_filename:
+                    new_filename = photo_filename.replace("temp_", f"{complaint_id}_")
+                    old_path = os.path.join(analyzer.photos_dir, photo_filename)
+                    new_path = os.path.join(analyzer.photos_dir, new_filename)
+                    if os.path.exists(old_path):
+                        os.rename(old_path, new_path)
+                    
+                    # Update the dataframe with correct filename
+                    updated_df.loc[updated_df['Complaint_ID'] == complaint_id, 'Photo_Filename'] = new_filename
+                    updated_df.to_csv(analyzer.csv_file, index=False)
+                    updated_df.to_excel(analyzer.excel_file, index=False)
+                    photo_filename = new_filename
                 
                 # Display results
                 st.success("✅ Complaint submitted successfully!")
                 
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.info(f"**Category:** {category}")
+                    st.info(f"**Complaint ID:** {complaint_id}")
                 with col2:
+                    st.info(f"**Category:** {category}")
+                with col3:
                     urgency_color = "🔴" if urgency == "High" else "🟡" if urgency == "Medium" else "🟢"
                     st.info(f"**Urgency:** {urgency_color} {urgency}")
-                with col3:
+                with col4:
                     st.info(f"**Location:** {location if location else 'Not specified'}")
+                
+                # Show photo if uploaded
+                if photo_filename and photo_filename != "No Photo":
+                    st.subheader("📷 Uploaded Photo")
+                    photo_preview = analyzer.get_photo_preview(photo_filename)
+                    if photo_preview:
+                        st.image(photo_preview, caption="Your uploaded photo", use_column_width=True)
+                    st.info(f"**Photo saved as:** {photo_filename}")
         else:
             st.error("Please enter a complaint description")
+
+def render_photo_gallery(analyzer, complaints_df):
+    """Render photo gallery section"""
+    st.header("🖼️ Complaint Photo Gallery")
+    
+    # Get all photos
+    all_photos = analyzer.get_all_photos()
+    
+    if not all_photos:
+        st.info("No photos uploaded yet. Submit a complaint with photos to see them here!")
+        return
+    
+    st.subheader(f"📸 Found {len(all_photos)} complaint photos")
+    
+    # Filter complaints with photos
+    complaints_with_photos = complaints_df[
+        (complaints_df['Photo_Filename'] != "No Photo") & 
+        (complaints_df['Photo_Filename'].notna())
+    ]
+    
+    if complaints_with_photos.empty:
+        st.info("No complaint photos found in the database.")
+        return
+    
+    # Display photos in a grid
+    cols = st.columns(3)
+    for idx, (_, row) in enumerate(complaints_with_photos.iterrows()):
+        photo_filename = row['Photo_Filename']
+        if pd.notna(photo_filename) and isinstance(photo_filename, str):
+            photo_preview = analyzer.get_photo_preview(photo_filename, width=250)
+            if photo_preview:
+                with cols[idx % 3]:
+                    st.image(photo_preview, use_column_width=True)
+                    st.caption(f"**{row['Complaint_ID']}**")
+                    st.caption(f"Category: {row['Category']} | Urgency: {row['Urgency']}")
+                    st.caption(f"Date: {row['Timestamp'].strftime('%Y-%m-%d')}")
 
 def process_batch_complaints(analyzer, batch_df):
     """Process batch complaints from CSV"""
@@ -561,8 +757,8 @@ def process_batch_complaints(analyzer, batch_df):
             urgency = analyzer.detect_urgency(complaint_text)
             location = analyzer.extract_location_keywords(complaint_text)
             
-            # Save complaint
-            analyzer.save_complaint(username, complaint_text, category, urgency, location)
+            # Save complaint (no photos in batch upload)
+            analyzer.save_complaint(username, complaint_text, category, urgency, location, None)
             successful_count += 1
             
         except Exception as e:
@@ -575,13 +771,16 @@ def process_batch_complaints(analyzer, batch_df):
     
     st.success(f"✅ Successfully processed {successful_count} out of {total_count} complaints!")
 
-def render_complaint_view(complaints_df):
-    """Render all complaints view"""
+def render_complaint_view(analyzer, complaints_df):
+    """Render all complaints view with photos"""
     st.header("📋 All Complaints")
     
     if complaints_df.empty:
         st.info("No complaints submitted yet. Be the first to submit a complaint!")
         return
+    
+    # Fix any NaN values in Complaint_ID before displaying
+    complaints_df['Complaint_ID'] = complaints_df['Complaint_ID'].fillna('Unknown_ID')
     
     # Filters
     col1, col2, col3, col4 = st.columns(4)
@@ -614,7 +813,8 @@ def render_complaint_view(complaints_df):
     if search_text:
         filtered_df = filtered_df[
             filtered_df['Complaint_Text'].str.contains(search_text, case=False, na=False) |
-            filtered_df['Location_Keywords'].str.contains(search_text, case=False, na=False)
+            filtered_df['Location_Keywords'].str.contains(search_text, case=False, na=False) |
+            filtered_df['Complaint_ID'].str.contains(search_text, case=False, na=False)
         ]
     
     # Apply sorting
@@ -633,19 +833,41 @@ def render_complaint_view(complaints_df):
     # Display statistics
     st.subheader(f"📊 Showing {len(filtered_df)} complaints")
     
-    # Display complaints in an interactive table
-    st.dataframe(
-        filtered_df,
-        use_container_width=True,
-        column_config={
-            "Timestamp": st.column_config.DatetimeColumn("Timestamp", format="DD/MM/YYYY HH:mm"),
-            "Username": "User",
-            "Complaint_Text": "Complaint",
-            "Category": "Category",
-            "Urgency": "Urgency",
-            "Location_Keywords": "Location"
-        }
-    )
+    # Display each complaint with photo
+    for idx, row in filtered_df.iterrows():
+        # Ensure we have valid values for display
+        complaint_id = str(row['Complaint_ID']) if pd.notna(row['Complaint_ID']) else "Unknown_ID"
+        category = str(row['Category']) if pd.notna(row['Category']) else "Unknown"
+        urgency = str(row['Urgency']) if pd.notna(row['Urgency']) else "Unknown"
+        
+        with st.expander(f"🔸 {complaint_id} - {category} - {urgency} Urgency", expanded=False):
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.write(f"**📝 Complaint:** {row['Complaint_Text']}")
+                st.write(f"**👤 Submitted by:** {row['Username']}")
+                st.write(f"**📍 Location:** {row['Location_Keywords']}")
+                st.write(f"**🕒 Submitted on:** {row['Timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+                
+                # Urgency badge
+                urgency_color = "🔴" if row['Urgency'] == "High" else "🟡" if row['Urgency'] == "Medium" else "🟢"
+                st.write(f"**🚨 Urgency Level:** {urgency_color} {row['Urgency']}")
+                
+                # Category badge
+                st.write(f"**📊 Category:** {row['Category']}")
+            
+            with col2:
+                # Display photo if available (with error handling)
+                photo_filename = row['Photo_Filename']
+                if pd.notna(photo_filename) and isinstance(photo_filename, str) and photo_filename not in ["No Photo", "", "nan"]:
+                    photo_preview = analyzer.get_photo_preview(photo_filename)
+                    if photo_preview:
+                        st.image(photo_preview, caption="📷 Complaint Photo", use_column_width=True)
+                        st.info(f"**Photo:** {photo_filename}")
+                    else:
+                        st.info("📷 Photo file not found")
+                else:
+                    st.info("📷 No photo uploaded")
 
 def render_analytics_dashboard(analyzer, complaints_df):
     """Render enhanced analytics dashboard with NLP visualizations"""
@@ -675,8 +897,12 @@ def render_analytics_dashboard(analyzer, complaints_df):
         st.metric("Unique Users", unique_users)
     
     with col4:
-        most_common_category = complaints_df['Category'].mode()[0] if not complaints_df.empty else "N/A"
-        st.metric("Most Common Issue", most_common_category)
+        # Count complaints with photos
+        with_photos = len(complaints_df[
+            (complaints_df['Photo_Filename'] != "No Photo") & 
+            (complaints_df['Photo_Filename'].notna())
+        ])
+        st.metric("Complaints with Photos", with_photos)
     
     # First row of charts
     col1, col2 = st.columns(2)
@@ -839,7 +1065,7 @@ def render_model_performance(analyzer, complaints_df):
                     st.write(f"**Predicted Urgency:** {predicted_urgency} {status_icon}")
 
 def render_download_section(analyzer, complaints_df):
-    """Render download section"""
+    """Render download section with enhanced photo support"""
     st.header("📥 Download Data")
     
     col1, col2 = st.columns(2)
@@ -854,7 +1080,7 @@ def render_download_section(analyzer, complaints_df):
                 data=csv_data,
                 file_name="complaints_data.csv",
                 mime="text/csv",
-                help="Download all complaints as CSV file"
+                help="Download all complaints as CSV file (includes photo filenames)"
             )
             
             # Create Excel file in memory for download
@@ -868,19 +1094,43 @@ def render_download_section(analyzer, complaints_df):
                 data=excel_data,
                 file_name="complaints_data.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                help="Download all complaints as Excel file"
+                help="Download all complaints as Excel file (includes photo filenames)"
             )
+            
+            # Download photos as zip
+            st.subheader("📸 Download Photos")
+            photos_exist = any((complaints_df['Photo_Filename'] != "No Photo") & complaints_df['Photo_Filename'].notna())
+            if photos_exist:
+                zip_data = analyzer.create_photos_zip()
+                if zip_data:
+                    st.download_button(
+                        label="🗂️ Download All Photos (ZIP)",
+                        data=zip_data,
+                        file_name="complaint_photos.zip",
+                        mime="application/zip",
+                        help="Download all complaint photos as a ZIP file"
+                    )
+                else:
+                    st.warning("Could not create photos zip file")
+            else:
+                st.info("No photos available for download")
+            
+            st.info("""
+            **📝 Download Notes:**
+            - **CSV/Excel files** contain photo filenames, not actual images
+            - **ZIP file** contains all actual complaint photos
+            - Match photos to complaints using the filenames in the data files
+            """)
             
             st.info(f"Total records available: {len(complaints_df)}")
         else:
             st.info("No complaints data available for download")
     
     with col2:
-        st.subheader("Download Word Cloud")
+        st.subheader("Download Visualizations")
         if not complaints_df.empty:
             wordcloud_img = analyzer.generate_wordcloud(complaints_df)
             
-            # Convert PIL Image to bytes for download
             img_buffer = io.BytesIO()
             wordcloud_img.save(img_buffer, format='PNG')
             img_data = img_buffer.getvalue()
