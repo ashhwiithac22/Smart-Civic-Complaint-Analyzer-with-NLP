@@ -8,9 +8,12 @@ from textblob import TextBlob
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import joblib
 import plotly.express as px
 import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import seaborn as sns
 from collections import Counter
 import warnings
 import io
@@ -29,6 +32,7 @@ st.set_page_config(
 class ComplaintAnalyzer:
     def __init__(self):
         self.excel_file = "complaints.xlsx"
+        self.csv_file = "complaints.csv"  # Added CSV for better persistence
         self.model_file = "complaint_classifier.pkl"
         self.vectorizer_file = "tfidf_vectorizer.pkl"
         self.label_encoder_file = "label_encoder.pkl"
@@ -184,21 +188,39 @@ class ComplaintAnalyzer:
         
         return ', '.join(set(locations[:3]))  # Return unique locations, max 3
 
-    def initialize_excel_file(self):
-        """Initialize Excel file if it doesn't exist"""
+    def initialize_data_files(self):
+        """Initialize data files if they don't exist"""
+        columns = ['Timestamp', 'Username', 'Complaint_Text', 'Category', 'Urgency', 'Location_Keywords']
+        
+        # Initialize Excel file
         if not os.path.exists(self.excel_file):
-            df = pd.DataFrame(columns=[
-                'Timestamp', 'Username', 'Complaint_Text', 
-                'Category', 'Urgency', 'Location_Keywords'
-            ])
+            df = pd.DataFrame(columns=columns)
             df.to_excel(self.excel_file, index=False)
+        
+        # Initialize CSV file for better persistence
+        if not os.path.exists(self.csv_file):
+            df = pd.DataFrame(columns=columns)
+            df.to_csv(self.csv_file, index=False)
 
     def save_complaint(self, username, complaint_text, category, urgency, location):
-        """Save complaint to Excel file"""
-        self.initialize_excel_file()
+        """Save complaint to both CSV and Excel files for persistence"""
+        self.initialize_data_files()
         
-        # Read existing data
-        df = pd.read_excel(self.excel_file)
+        # Try to load existing data from CSV first
+        try:
+            df = pd.read_csv(self.csv_file)
+            # Ensure Timestamp is datetime
+            if not df.empty and 'Timestamp' in df.columns:
+                df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+        except:
+            # If CSV fails, try Excel
+            try:
+                df = pd.read_excel(self.excel_file)
+            except:
+                df = pd.DataFrame(columns=[
+                    'Timestamp', 'Username', 'Complaint_Text', 
+                    'Category', 'Urgency', 'Location_Keywords'
+                ])
         
         # Create new row
         new_row = {
@@ -213,10 +235,83 @@ class ComplaintAnalyzer:
         # Append new row
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
         
-        # Save back to Excel
+        # Save to both CSV and Excel for redundancy
+        df.to_csv(self.csv_file, index=False)
         df.to_excel(self.excel_file, index=False)
         
         return df
+
+    def load_complaints(self):
+        """Load all complaints from CSV file with fallback to Excel"""
+        try:
+            # Try CSV first for better persistence
+            if os.path.exists(self.csv_file):
+                df = pd.read_csv(self.csv_file)
+                # Convert Timestamp string to datetime
+                if not df.empty and 'Timestamp' in df.columns:
+                    df['Timestamp'] = pd.to_datetime(df['Timestamp'])
+                return df
+            # Fallback to Excel
+            elif os.path.exists(self.excel_file):
+                df = pd.read_excel(self.excel_file)
+                # Save to CSV for future use
+                df.to_csv(self.csv_file, index=False)
+                return df
+            else:
+                return pd.DataFrame()
+        except Exception as e:
+            st.error(f"Error loading complaints: {e}")
+            return pd.DataFrame()
+
+    def get_sentiment(self, text):
+        """Get sentiment analysis using TextBlob"""
+        try:
+            analysis = TextBlob(text)
+            polarity = analysis.sentiment.polarity
+            
+            if polarity > 0.1:
+                return "Positive"
+            elif polarity < -0.1:
+                return "Negative"
+            else:
+                return "Neutral"
+        except:
+            return "Neutral"
+
+    def get_classification_metrics(self, complaints_df):
+        """Calculate classification metrics for the urgency model"""
+        if complaints_df.empty or len(complaints_df) < 3:
+            return None, None
+        
+        try:
+            # For demonstration, we'll use the actual urgency as ground truth
+            # In a real scenario, you'd have labeled test data
+            y_true = complaints_df['Urgency']
+            
+            # Get predictions using the current model
+            y_pred = [self.detect_urgency(text) for text in complaints_df['Complaint_Text']]
+            
+            # Calculate metrics
+            accuracy = accuracy_score(y_true, y_pred)
+            precision = precision_score(y_true, y_pred, average='weighted', zero_division=0)
+            recall = recall_score(y_true, y_pred, average='weighted', zero_division=0)
+            f1 = f1_score(y_true, y_pred, average='weighted', zero_division=0)
+            
+            metrics = {
+                'Accuracy': accuracy,
+                'Precision': precision,
+                'Recall': recall,
+                'F1-Score': f1
+            }
+            
+            # Confusion matrix
+            cm = confusion_matrix(y_true, y_pred, labels=['Low', 'Medium', 'High'])
+            
+            return metrics, cm
+            
+        except Exception as e:
+            st.warning(f"Could not calculate metrics: {e}")
+            return None, None
 
     def generate_wordcloud(self, df):
         """Generate word cloud from all complaints using PIL (no wordcloud library)"""
@@ -333,16 +428,6 @@ class ComplaintAnalyzer:
             img = Image.new('RGB', (800, 400), color='white')
             return img
 
-    def load_complaints(self):
-        """Load all complaints from Excel file"""
-        if os.path.exists(self.excel_file):
-            try:
-                return pd.read_excel(self.excel_file)
-            except:
-                return pd.DataFrame()
-        else:
-            return pd.DataFrame()
-
 def main():
     st.title("🏙️ Smart Civic Complaint Analyzer")
     st.markdown("""
@@ -357,7 +442,7 @@ def main():
     st.sidebar.title("Navigation")
     app_mode = st.sidebar.selectbox(
         "Choose a section",
-        ["Submit Complaint", "View All Complaints", "Analytics Dashboard", "Download Data"]
+        ["Submit Complaint", "View All Complaints", "Analytics Dashboard", "Model Performance", "Download Data"]
     )
     
     # Load existing complaints
@@ -371,6 +456,9 @@ def main():
     
     elif app_mode == "Analytics Dashboard":
         render_analytics_dashboard(analyzer, complaints_df)
+    
+    elif app_mode == "Model Performance":
+        render_model_performance(analyzer, complaints_df)
     
     elif app_mode == "Download Data":
         render_download_section(analyzer, complaints_df)
@@ -560,58 +648,15 @@ def render_complaint_view(complaints_df):
     )
 
 def render_analytics_dashboard(analyzer, complaints_df):
-    """Render analytics dashboard"""
-    st.header("📈 Analytics Dashboard")
+    """Render enhanced analytics dashboard with NLP visualizations"""
+    st.header("📈 Enhanced Analytics Dashboard")
     
     if complaints_df.empty:
         st.info("No data available for analytics. Submit some complaints first!")
         return
     
-    # Generate word cloud
-    wordcloud_img = analyzer.generate_wordcloud(complaints_df)
-    
-    # Layout for charts
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Category distribution
-        st.subheader("Complaints by Category")
-        category_counts = complaints_df['Category'].value_counts()
-        fig = px.pie(
-            values=category_counts.values,
-            names=category_counts.index,
-            color_discrete_sequence=px.colors.sequential.Viridis
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Urgency distribution
-        st.subheader("Complaints by Urgency")
-        urgency_counts = complaints_df['Urgency'].value_counts()
-        fig = px.bar(
-            x=urgency_counts.index,
-            y=urgency_counts.values,
-            color=urgency_counts.index,
-            color_discrete_map={'High': 'red', 'Medium': 'orange', 'Low': 'green'},
-            labels={'x': 'Urgency Level', 'y': 'Number of Complaints'}
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        # Display word cloud
-        st.subheader("Word Cloud - Most Frequent Issues")
-        st.image(wordcloud_img, use_column_width=True)
-        
-        # Recent complaints trend
-        st.subheader("Recent Complaints Trend")
-        complaints_df['Date'] = pd.to_datetime(complaints_df['Timestamp']).dt.date
-        daily_complaints = complaints_df.groupby('Date').size().reset_index(name='Count')
-        fig = px.line(
-            daily_complaints,
-            x='Date',
-            y='Count',
-            title='Daily Complaints Trend'
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # Add sentiment analysis to complaints data
+    complaints_df['Sentiment'] = complaints_df['Complaint_Text'].apply(analyzer.get_sentiment)
     
     # Key metrics
     st.subheader("📊 Key Metrics")
@@ -632,6 +677,166 @@ def render_analytics_dashboard(analyzer, complaints_df):
     with col4:
         most_common_category = complaints_df['Category'].mode()[0] if not complaints_df.empty else "N/A"
         st.metric("Most Common Issue", most_common_category)
+    
+    # First row of charts
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Sentiment Distribution
+        st.subheader("😊 Sentiment Analysis")
+        sentiment_counts = complaints_df['Sentiment'].value_counts()
+        fig = px.pie(
+            values=sentiment_counts.values,
+            names=sentiment_counts.index,
+            color=sentiment_counts.index,
+            color_discrete_map={'Positive': 'green', 'Neutral': 'blue', 'Negative': 'red'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Urgency distribution
+        st.subheader("🚨 Complaints by Urgency")
+        urgency_counts = complaints_df['Urgency'].value_counts()
+        fig = px.bar(
+            x=urgency_counts.index,
+            y=urgency_counts.values,
+            color=urgency_counts.index,
+            color_discrete_map={'High': 'red', 'Medium': 'orange', 'Low': 'green'},
+            labels={'x': 'Urgency Level', 'y': 'Number of Complaints'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Category distribution
+        st.subheader("📊 Complaints by Category")
+        category_counts = complaints_df['Category'].value_counts()
+        fig = px.pie(
+            values=category_counts.values,
+            names=category_counts.index,
+            color_discrete_sequence=px.colors.sequential.Viridis
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Recent complaints trend
+        st.subheader("📈 Complaints Over Time")
+        complaints_df['Date'] = pd.to_datetime(complaints_df['Timestamp']).dt.date
+        daily_complaints = complaints_df.groupby('Date').size().reset_index(name='Count')
+        fig = px.area(
+            daily_complaints,
+            x='Date',
+            y='Count',
+            title='Daily Complaint Trends'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Second row of charts
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Category vs Urgency Heatmap
+        st.subheader("🔥 Category vs Urgency Heatmap")
+        heatmap_data = pd.crosstab(complaints_df['Category'], complaints_df['Urgency'])
+        fig = px.imshow(
+            heatmap_data,
+            labels=dict(x="Urgency Level", y="Category", color="Count"),
+            aspect="auto",
+            color_continuous_scale="Viridis"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Top Keywords Frequency
+        st.subheader("🔤 Top Complaint Keywords")
+        all_text = ' '.join(complaints_df['Complaint_Text'].astype(str))
+        words = re.findall(r'\b[a-zA-Z]{4,}\b', all_text.lower())
+        stop_words = {'this', 'that', 'with', 'have', 'from', 'they', 'when', 'were', 'been', 'also'}
+        filtered_words = [word for word in words if word not in stop_words and len(word) > 3]
+        word_freq = Counter(filtered_words).most_common(10)
+        
+        if word_freq:
+            keywords, counts = zip(*word_freq)
+            fig = px.bar(
+                x=counts,
+                y=keywords,
+                orientation='h',
+                title='Most Frequent Keywords',
+                labels={'x': 'Frequency', 'y': 'Keywords'}
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Third row - Word Cloud
+    st.subheader("☁️ Word Cloud - Most Frequent Issues")
+    wordcloud_img = analyzer.generate_wordcloud(complaints_df)
+    st.image(wordcloud_img, use_column_width=True)
+
+def render_model_performance(analyzer, complaints_df):
+    """Render model performance metrics section"""
+    st.header("🤖 Model Performance Metrics")
+    
+    if complaints_df.empty:
+        st.info("No complaints data available. Submit some complaints to see model performance.")
+        return
+    
+    # Get classification metrics
+    metrics, cm = analyzer.get_classification_metrics(complaints_df)
+    
+    if metrics is None:
+        st.info("Need at least 3 complaints to calculate model performance metrics.")
+        return
+    
+    # Display metrics in columns
+    st.subheader("📊 Classification Metrics")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Accuracy", f"{metrics['Accuracy']:.2%}")
+    with col2:
+        st.metric("Precision", f"{metrics['Precision']:.2%}")
+    with col3:
+        st.metric("Recall", f"{metrics['Recall']:.2%}")
+    with col4:
+        st.metric("F1-Score", f"{metrics['F1-Score']:.2%}")
+    
+    # Confusion Matrix
+    st.subheader("🎯 Confusion Matrix")
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        fig, ax = plt.subplots(figsize=(6, 4))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                   xticklabels=['Low', 'Medium', 'High'], 
+                   yticklabels=['Low', 'Medium', 'High'],
+                   ax=ax)
+        ax.set_xlabel('Predicted Urgency')
+        ax.set_ylabel('Actual Urgency')
+        ax.set_title('Urgency Classification Confusion Matrix')
+        st.pyplot(fig)
+    
+    with col2:
+        st.info("""
+        **Confusion Matrix Guide:**
+        - **Diagonal:** Correct predictions
+        - **Off-diagonal:** Misclassifications
+        - Colors show prediction density
+        """)
+    
+    # Sample predictions for qualitative analysis
+    st.subheader("🔍 Sample Predictions")
+    
+    if len(complaints_df) >= 3:
+        # Display recent complaints with predictions
+        sample_complaints = complaints_df.tail(3).copy()
+        
+        for idx, row in sample_complaints.iterrows():
+            with st.expander(f"Complaint: {row['Complaint_Text'][:80]}..."):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.write(f"**Category:** {row['Category']}")
+                with col2:
+                    st.write(f"**Actual Urgency:** {row['Urgency']}")
+                with col3:
+                    predicted_urgency = analyzer.detect_urgency(row['Complaint_Text'])
+                    status_icon = "✅" if row['Urgency'] == predicted_urgency else "❌"
+                    st.write(f"**Predicted Urgency:** {predicted_urgency} {status_icon}")
 
 def render_download_section(analyzer, complaints_df):
     """Render download section"""

@@ -1,0 +1,9 @@
+Timestamp,Username,Complaint_Text,Category,Urgency,Location_Keywords
+2025-10-02 14:36:20.421000,Ashwitha C,There a major drainage blockage in area,Sanitation,Low,"in area, There"
+2025-10-15 12:16:30.196000,Ashwitha C,"The water pressure in our apartment building has been consistently low for the past week, making it difficult to take proper showers.",Water,Low,"in our, The"
+2025-10-15 12:16:40.494000,Ashwitha C,"The water pressure in our apartment building has been consistently low for the past week, making it difficult to take proper showers.",Water,Low,"in our, The"
+2025-10-15 12:20:21.188782,Ashwitha C,Unauthorized parking near the market area is causing traffic congestion during evening hours.,Water,Low,"near the, Unauthorized, area is"
+2025-10-15 12:23:17.857370,user123,The zebra crossing near the hospital needs better visibility markings for pedestrian safety,Roads,Low,"near the, The"
+2025-10-15 12:24:37.549536,user123,OVERHEATING TRANSFORMER with burning smell - could explode at any moment!,Electricity,Low,at any
+2025-10-15 12:43:14.744815,user123 ,An electric pole has fallen near the main road after last night’s storm. It’s sparking and could cause serious accidents if not fixed immediately.,Roads,High,"road after, near the, An"
+2025-10-15 18:01:29.206102,john,RADIATION LEAK suspected in medical facility - emergency containment needed!,Electricity,High,in medical
