@@ -10,7 +10,6 @@ from textblob import TextBlob
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import joblib
 import plotly.express as px
 import plotly.graph_objects as go
@@ -260,7 +259,7 @@ class ComplaintAnalyzer:
 
     def initialize_data_files(self):
         """Initialize data files if they don't exist"""
-        columns = ['Complaint_ID', 'Timestamp', 'Username', 'Complaint_Text', 
+        columns = ['Complaint_ID', 'Timestamp', 'Username', 'Phone_Number', 'Complaint_Text', 
                   'Category', 'Urgency', 'Location_Keywords', 'Photo_Filename']
         
         # Initialize Excel file
@@ -277,7 +276,7 @@ class ComplaintAnalyzer:
         """Generate unique complaint ID"""
         return f"COMP_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{random.randint(1000, 9999)}"
 
-    def save_complaint(self, username, complaint_text, category, urgency, location, photo_filename):
+    def save_complaint(self, username, phone_number, complaint_text, category, urgency, location, photo_filename):
         """Save complaint to both CSV and Excel files for persistence"""
         self.initialize_data_files()
         
@@ -288,7 +287,9 @@ class ComplaintAnalyzer:
             if not df.empty and 'Timestamp' in df.columns:
                 df['Timestamp'] = pd.to_datetime(df['Timestamp'])
             
-            # Handle missing Photo_Filename column in old data
+            # Handle missing columns in old data
+            if 'Phone_Number' not in df.columns:
+                df['Phone_Number'] = "Not Provided"
             if 'Photo_Filename' not in df.columns:
                 df['Photo_Filename'] = "No Photo"
                 
@@ -296,12 +297,14 @@ class ComplaintAnalyzer:
             # If CSV fails, try Excel
             try:
                 df = pd.read_excel(self.excel_file)
-                # Handle missing Photo_Filename column in old data
+                # Handle missing columns in old data
+                if 'Phone_Number' not in df.columns:
+                    df['Phone_Number'] = "Not Provided"
                 if 'Photo_Filename' not in df.columns:
                     df['Photo_Filename'] = "No Photo"
             except:
                 df = pd.DataFrame(columns=[
-                    'Complaint_ID', 'Timestamp', 'Username', 'Complaint_Text', 
+                    'Complaint_ID', 'Timestamp', 'Username', 'Phone_Number', 'Complaint_Text', 
                     'Category', 'Urgency', 'Location_Keywords', 'Photo_Filename'
                 ])
         
@@ -313,6 +316,7 @@ class ComplaintAnalyzer:
             'Complaint_ID': complaint_id,
             'Timestamp': datetime.now(),
             'Username': username,
+            'Phone_Number': phone_number,
             'Complaint_Text': complaint_text,
             'Category': category,
             'Urgency': urgency,
@@ -339,7 +343,9 @@ class ComplaintAnalyzer:
                 if not df.empty and 'Timestamp' in df.columns:
                     df['Timestamp'] = pd.to_datetime(df['Timestamp'])
                 
-                # Handle missing Photo_Filename column in old data
+                # Handle missing columns in old data
+                if 'Phone_Number' not in df.columns:
+                    df['Phone_Number'] = "Not Provided"
                 if 'Photo_Filename' not in df.columns:
                     df['Photo_Filename'] = "No Photo"
                 else:
@@ -350,7 +356,9 @@ class ComplaintAnalyzer:
             # Fallback to Excel
             elif os.path.exists(self.excel_file):
                 df = pd.read_excel(self.excel_file)
-                # Handle missing Photo_Filename column in old data
+                # Handle missing columns in old data
+                if 'Phone_Number' not in df.columns:
+                    df['Phone_Number'] = "Not Provided"
                 if 'Photo_Filename' not in df.columns:
                     df['Photo_Filename'] = "No Photo"
                 else:
@@ -381,48 +389,12 @@ class ComplaintAnalyzer:
         except:
             return "Neutral"
 
-    def get_classification_metrics(self, complaints_df):
-        """Calculate classification metrics for the urgency model"""
-        if complaints_df.empty or len(complaints_df) < 3:
-            return None, None
-        
-        try:
-            # For demonstration, we'll use the actual urgency as ground truth
-            # In a real scenario, you'd have labeled test data
-            y_true = complaints_df['Urgency']
-            
-            # Get predictions using the current model
-            y_pred = [self.detect_urgency(text) for text in complaints_df['Complaint_Text']]
-            
-            # Calculate metrics
-            accuracy = accuracy_score(y_true, y_pred)
-            precision = precision_score(y_true, y_pred, average='weighted', zero_division=0)
-            recall = recall_score(y_true, y_pred, average='weighted', zero_division=0)
-            f1 = f1_score(y_true, y_pred, average='weighted', zero_division=0)
-            
-            metrics = {
-                'Accuracy': accuracy,
-                'Precision': precision,
-                'Recall': recall,
-                'F1-Score': f1
-            }
-            
-            # Confusion matrix
-            cm = confusion_matrix(y_true, y_pred, labels=['Low', 'Medium', 'High'])
-            
-            return metrics, cm
-            
-        except Exception as e:
-            st.warning(f"Could not calculate metrics: {e}")
-            return None, None
-
     def generate_wordcloud(self, df):
-        """Generate word cloud from all complaints using PIL (no wordcloud library)"""
+        """Generate word cloud from all complaints with stopwords removed"""
         if df.empty:
             # Create a simple placeholder image
             img = Image.new('RGB', (800, 400), color='white')
             draw = ImageDraw.Draw(img)
-            # Try to use a default font, or use None if not available
             try:
                 font = ImageFont.load_default()
                 draw.text((400, 200), "No complaints yet", fill="black", font=font, anchor="mm")
@@ -441,13 +413,27 @@ class ComplaintAnalyzer:
             # Preprocess text
             words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
             
-            # Remove common stop words
-            stop_words = {'the', 'and', 'is', 'in', 'it', 'to', 'of', 'for', 'with', 'on', 'at', 'by', 'this', 'that', 'are', 'as', 'be', 'was', 'were', 'has', 'have', 'had', 'but', 'not', 'we', 'they', 'you', 'i', 'he', 'she', 'his', 'her', 'our', 'my', 'your', 'their', 'its'}
+            # Comprehensive stop words list
+            stop_words = {
+                'the', 'and', 'is', 'in', 'it', 'to', 'of', 'for', 'with', 'on', 'at', 'by', 
+                'this', 'that', 'are', 'as', 'be', 'was', 'were', 'has', 'have', 'had', 'but', 
+                'not', 'we', 'they', 'you', 'i', 'he', 'she', 'his', 'her', 'our', 'my', 'your', 
+                'their', 'its', 'from', 'or', 'an', 'a', 'if', 'will', 'would', 'could', 'should',
+                'when', 'where', 'how', 'what', 'why', 'which', 'who', 'whom', 'there', 'here',
+                'been', 'have', 'has', 'had', 'do', 'does', 'did', 'done', 'doing', 'can', 'could',
+                'may', 'might', 'must', 'shall', 'should', 'will', 'would', 'get', 'got', 'getting',
+                'like', 'just', 'more', 'so', 'than', 'then', 'them', 'these', 'those', 'too',
+                'very', 'also', 'any', 'both', 'each', 'few', 'most', 'other', 'some', 'such',
+                'no', 'nor', 'own', 'same', 'see', 'now', 'one', 'two', 'three', 'first', 'second',
+                'new', 'old', 'good', 'bad', 'big', 'small', 'high', 'low', 'long', 'short',
+                'great', 'little', 'much', 'many', 'another', 'every', 'all', 'only', 'very'
+            }
+            
             filtered_words = [word for word in words if word not in stop_words]
             
             # Count word frequencies
             word_freq = Counter(filtered_words)
-            top_words = word_freq.most_common(50)  # Get top 50 words
+            top_words = word_freq.most_common(50)
             
             if not top_words:
                 img = Image.new('RGB', (800, 400), color='white')
@@ -468,7 +454,7 @@ class ComplaintAnalyzer:
             
             positions_used = []
             
-            for word, freq in top_words[:30]:  # Use top 30 words for clarity
+            for word, freq in top_words[:30]:
                 # Calculate font size based on frequency (scaled)
                 if max_freq == min_freq:
                     font_size = 24
@@ -511,7 +497,6 @@ class ComplaintAnalyzer:
                         positions_used.append((x, y, text_width, text_height))
                         break
                 else:
-                    # If no position found, skip this word
                     continue
                 
                 # Choose color
@@ -527,7 +512,6 @@ class ComplaintAnalyzer:
             
         except Exception as e:
             st.warning(f"Word cloud generation failed: {e}")
-            # Return placeholder image
             img = Image.new('RGB', (800, 400), color='white')
             return img
 
@@ -545,7 +529,7 @@ def main():
     st.sidebar.title("Navigation")
     app_mode = st.sidebar.selectbox(
         "Choose a section",
-        ["Submit Complaint", "View All Complaints", "Analytics Dashboard", "Photo Gallery", "Model Performance", "Download Data"]
+        ["Submit Complaint", "View All Complaints", "Analytics Dashboard", "Photo Gallery", "AI Insights", "Download Data"]
     )
     
     # Load existing complaints
@@ -563,8 +547,8 @@ def main():
     elif app_mode == "Photo Gallery":
         render_photo_gallery(analyzer, complaints_df)
     
-    elif app_mode == "Model Performance":
-        render_model_performance(analyzer, complaints_df)
+    elif app_mode == "AI Insights":
+        render_ai_insights(analyzer, complaints_df)
     
     elif app_mode == "Download Data":
         render_download_section(analyzer, complaints_df)
@@ -577,6 +561,10 @@ def render_complaint_submission(analyzer, complaints_df):
     
     with col1:
         username = st.text_input("Your Name (Optional)", placeholder="Enter your name")
+        
+        # Phone number field
+        phone_number = st.text_input("Phone Number (Optional)", placeholder="Enter your phone number")
+        
         complaint_text = st.text_area(
             "Describe your complaint in detail",
             placeholder="Example: There's a major water pipe burst near Main Street causing flooding in the area. This is an emergency situation!",
@@ -592,20 +580,7 @@ def render_complaint_submission(analyzer, complaints_df):
         )
         
         if uploaded_photo is not None:
-            # Display photo preview
             st.image(uploaded_photo, caption="📸 Photo Preview", width=300)
-        
-        # Batch upload option
-        st.subheader("📁 Batch Upload (Optional)")
-        uploaded_file = st.file_uploader("Upload CSV file with multiple complaints", type=['csv'])
-        
-        if uploaded_file is not None:
-            try:
-                batch_df = pd.read_csv(uploaded_file)
-                if st.button("Process Batch Complaints"):
-                    process_batch_complaints(analyzer, batch_df)
-            except Exception as e:
-                st.error(f"Error reading CSV file: {e}")
     
     with col2:
         st.subheader("💡 Tips for Effective Complaints")
@@ -625,13 +600,13 @@ def render_complaint_submission(analyzer, complaints_df):
         - Hazard, Danger, Accident
         """)
         
-        st.subheader("📸 Photo Guidelines")
+        st.subheader("📞 Contact Information")
         st.markdown("""
-        - Clear, well-lit photos work best
-        - Show the problem area clearly
-        - Include landmarks if possible
-        - Maximum file size: 5MB
-        - Supported formats: JPG, PNG, GIF
+        Providing phone number helps:
+        - Faster resolution updates
+        - Verification if needed
+        - Emergency contact
+        - Your data is secure with us
         """)
     
     # Process single complaint
@@ -646,13 +621,13 @@ def render_complaint_submission(analyzer, complaints_df):
                 # Save photo if uploaded
                 photo_filename = None
                 if uploaded_photo is not None:
-                    # Generate temporary ID for photo naming
                     temp_id = f"temp_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                     photo_filename = analyzer.save_uploaded_photo(uploaded_photo, temp_id)
                 
-                # Save complaint (will get actual ID during save)
+                # Save complaint
                 updated_df, complaint_id = analyzer.save_complaint(
                     username if username else "Anonymous",
+                    phone_number if phone_number else "Not Provided",
                     complaint_text,
                     category,
                     urgency,
@@ -688,13 +663,16 @@ def render_complaint_submission(analyzer, complaints_df):
                 with col4:
                     st.info(f"**Location:** {location if location else 'Not specified'}")
                 
+                # Show contact info summary
+                if phone_number:
+                    st.info(f"**📞 Contact:** {phone_number}")
+                
                 # Show photo if uploaded
                 if photo_filename and photo_filename != "No Photo":
                     st.subheader("📷 Uploaded Photo")
                     photo_preview = analyzer.get_photo_preview(photo_filename)
                     if photo_preview:
                         st.image(photo_preview, caption="Your uploaded photo", use_column_width=True)
-                    st.info(f"**Photo saved as:** {photo_filename}")
         else:
             st.error("Please enter a complaint description")
 
@@ -733,43 +711,6 @@ def render_photo_gallery(analyzer, complaints_df):
                     st.caption(f"**{row['Complaint_ID']}**")
                     st.caption(f"Category: {row['Category']} | Urgency: {row['Urgency']}")
                     st.caption(f"Date: {row['Timestamp'].strftime('%Y-%m-%d')}")
-
-def process_batch_complaints(analyzer, batch_df):
-    """Process batch complaints from CSV"""
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    required_columns = ['Username', 'Complaint_Text']
-    if not all(col in batch_df.columns for col in required_columns):
-        st.error("CSV must contain 'Username' and 'Complaint_Text' columns")
-        return
-    
-    successful_count = 0
-    total_count = len(batch_df)
-    
-    for i, row in batch_df.iterrows():
-        try:
-            complaint_text = str(row['Complaint_Text'])
-            username = str(row['Username']) if pd.notna(row['Username']) else "Anonymous"
-            
-            # Analyze complaint
-            category = analyzer.classify_complaint(complaint_text)
-            urgency = analyzer.detect_urgency(complaint_text)
-            location = analyzer.extract_location_keywords(complaint_text)
-            
-            # Save complaint (no photos in batch upload)
-            analyzer.save_complaint(username, complaint_text, category, urgency, location, None)
-            successful_count += 1
-            
-        except Exception as e:
-            st.warning(f"Failed to process row {i+1}: {e}")
-        
-        # Update progress
-        progress = (i + 1) / total_count
-        progress_bar.progress(progress)
-        status_text.text(f"Processed {i+1}/{total_count} complaints")
-    
-    st.success(f"✅ Successfully processed {successful_count} out of {total_count} complaints!")
 
 def render_complaint_view(analyzer, complaints_df):
     """Render all complaints view with photos"""
@@ -835,7 +776,6 @@ def render_complaint_view(analyzer, complaints_df):
     
     # Display each complaint with photo
     for idx, row in filtered_df.iterrows():
-        # Ensure we have valid values for display
         complaint_id = str(row['Complaint_ID']) if pd.notna(row['Complaint_ID']) else "Unknown_ID"
         category = str(row['Category']) if pd.notna(row['Category']) else "Unknown"
         urgency = str(row['Urgency']) if pd.notna(row['Urgency']) else "Unknown"
@@ -846,6 +786,8 @@ def render_complaint_view(analyzer, complaints_df):
             with col1:
                 st.write(f"**📝 Complaint:** {row['Complaint_Text']}")
                 st.write(f"**👤 Submitted by:** {row['Username']}")
+                if pd.notna(row['Phone_Number']) and row['Phone_Number'] != "Not Provided":
+                    st.write(f"**📞 Phone:** {row['Phone_Number']}")
                 st.write(f"**📍 Location:** {row['Location_Keywords']}")
                 st.write(f"**🕒 Submitted on:** {row['Timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
                 
@@ -857,7 +799,7 @@ def render_complaint_view(analyzer, complaints_df):
                 st.write(f"**📊 Category:** {row['Category']}")
             
             with col2:
-                # Display photo if available (with error handling)
+                # Display photo if available
                 photo_filename = row['Photo_Filename']
                 if pd.notna(photo_filename) and isinstance(photo_filename, str) and photo_filename not in ["No Photo", "", "nan"]:
                     photo_preview = analyzer.get_photo_preview(photo_filename)
@@ -897,7 +839,6 @@ def render_analytics_dashboard(analyzer, complaints_df):
         st.metric("Unique Users", unique_users)
     
     with col4:
-        # Count complaints with photos
         with_photos = len(complaints_df[
             (complaints_df['Photo_Filename'] != "No Photo") & 
             (complaints_df['Photo_Filename'].notna())
@@ -994,78 +935,151 @@ def render_analytics_dashboard(analyzer, complaints_df):
     wordcloud_img = analyzer.generate_wordcloud(complaints_df)
     st.image(wordcloud_img, use_column_width=True)
 
-def render_model_performance(analyzer, complaints_df):
-    """Render model performance metrics section"""
-    st.header("🤖 Model Performance Metrics")
+def render_ai_insights(analyzer, complaints_df):
+    """Render AI Insights section with NLP-focused visualizations"""
+    st.header("🤖 AI Insights & NLP Analysis")
     
     if complaints_df.empty:
-        st.info("No complaints data available. Submit some complaints to see model performance.")
+        st.info("No complaints data available. Submit some complaints to see AI insights.")
         return
     
-    # Get classification metrics
-    metrics, cm = analyzer.get_classification_metrics(complaints_df)
+    # Add sentiment analysis
+    complaints_df['Sentiment'] = complaints_df['Complaint_Text'].apply(analyzer.get_sentiment)
     
-    if metrics is None:
-        st.info("Need at least 3 complaints to calculate model performance metrics.")
-        return
+    st.subheader("📊 Text Analysis Visualizations")
     
-    # Display metrics in columns
-    st.subheader("📊 Classification Metrics")
-    col1, col2, col3, col4 = st.columns(4)
+    # First row
+    col1, col2 = st.columns(2)
     
     with col1:
-        st.metric("Accuracy", f"{metrics['Accuracy']:.2%}")
-    with col2:
-        st.metric("Precision", f"{metrics['Precision']:.2%}")
-    with col3:
-        st.metric("Recall", f"{metrics['Recall']:.2%}")
-    with col4:
-        st.metric("F1-Score", f"{metrics['F1-Score']:.2%}")
-    
-    # Confusion Matrix
-    st.subheader("🎯 Confusion Matrix")
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        fig, ax = plt.subplots(figsize=(6, 4))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                   xticklabels=['Low', 'Medium', 'High'], 
-                   yticklabels=['Low', 'Medium', 'High'],
-                   ax=ax)
-        ax.set_xlabel('Predicted Urgency')
-        ax.set_ylabel('Actual Urgency')
-        ax.set_title('Urgency Classification Confusion Matrix')
-        st.pyplot(fig)
-    
-    with col2:
-        st.info("""
-        **Confusion Matrix Guide:**
-        - **Diagonal:** Correct predictions
-        - **Off-diagonal:** Misclassifications
-        - Colors show prediction density
-        """)
-    
-    # Sample predictions for qualitative analysis
-    st.subheader("🔍 Sample Predictions")
-    
-    if len(complaints_df) >= 3:
-        # Display recent complaints with predictions
-        sample_complaints = complaints_df.tail(3).copy()
+        # Text Length Distribution
+        st.subheader("📏 Complaint Text Length Distribution")
+        complaints_df['Text_Length'] = complaints_df['Complaint_Text'].str.len()
+        fig = px.histogram(
+            complaints_df,
+            x='Text_Length',
+            nbins=20,
+            title='Distribution of Complaint Text Lengths',
+            labels={'Text_Length': 'Number of Characters'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
         
-        for idx, row in sample_complaints.iterrows():
-            with st.expander(f"Complaint: {row['Complaint_Text'][:80]}..."):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.write(f"**Category:** {row['Category']}")
-                with col2:
-                    st.write(f"**Actual Urgency:** {row['Urgency']}")
-                with col3:
-                    predicted_urgency = analyzer.detect_urgency(row['Complaint_Text'])
-                    status_icon = "✅" if row['Urgency'] == predicted_urgency else "❌"
-                    st.write(f"**Predicted Urgency:** {predicted_urgency} {status_icon}")
+        # Sentiment by Category
+        st.subheader("😊 Sentiment by Category")
+        sentiment_by_category = pd.crosstab(complaints_df['Category'], complaints_df['Sentiment'])
+        fig = px.bar(
+            sentiment_by_category,
+            barmode='group',
+            title='Sentiment Distribution Across Categories',
+            color_discrete_map={'Positive': 'green', 'Neutral': 'blue', 'Negative': 'red'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Word Frequency by Urgency
+        st.subheader("🔤 Top Words by Urgency Level")
+        
+        # Get top words for each urgency level
+        urgency_levels = complaints_df['Urgency'].unique()
+        
+        for urgency in urgency_levels:
+            urgency_text = ' '.join(complaints_df[complaints_df['Urgency'] == urgency]['Complaint_Text'].astype(str))
+            words = re.findall(r'\b[a-zA-Z]{4,}\b', urgency_text.lower())
+            stop_words = {'this', 'that', 'with', 'have', 'from', 'they', 'when', 'were', 'been', 'also', 'just', 'like'}
+            filtered_words = [word for word in words if word not in stop_words]
+            word_freq = Counter(filtered_words).most_common(5)
+            
+            if word_freq:
+                words, counts = zip(*word_freq)
+                fig = px.bar(
+                    x=counts,
+                    y=words,
+                    orientation='h',
+                    title=f'Top Words - {urgency} Urgency',
+                    color=counts,
+                    color_continuous_scale='Viridis'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+    
+    # Second row
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Response Time Simulation (based on urgency)
+        st.subheader("⏱️ Estimated Response Time by Urgency")
+        
+        # Simulate response times based on urgency
+        response_times = {
+            'High': '1-4 hours',
+            'Medium': '24-48 hours', 
+            'Low': '3-7 days'
+        }
+        
+        urgency_response = complaints_df['Urgency'].value_counts()
+        response_data = []
+        for urgency, count in urgency_response.items():
+            response_data.append({
+                'Urgency': urgency,
+                'Count': count,
+                'Estimated_Response': response_times.get(urgency, 'Unknown')
+            })
+        
+        response_df = pd.DataFrame(response_data)
+        fig = px.bar(
+            response_df,
+            x='Urgency',
+            y='Count',
+            color='Estimated_Response',
+            title='Complaints by Urgency & Estimated Response Time',
+            labels={'Count': 'Number of Complaints'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        # Category Trends Over Time
+        st.subheader("📈 Category Trends Over Time")
+        
+        if len(complaints_df) > 1:
+            complaints_df['Week'] = pd.to_datetime(complaints_df['Timestamp']).dt.to_period('W').astype(str)
+            weekly_trends = complaints_df.groupby(['Week', 'Category']).size().reset_index(name='Count')
+            
+            fig = px.line(
+                weekly_trends,
+                x='Week',
+                y='Count',
+                color='Category',
+                title='Weekly Complaint Trends by Category',
+                markers=True
+            )
+            fig.update_xaxes(tickangle=45)
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Third row - Enhanced Word Cloud
+    st.subheader("☁️ Enhanced Word Cloud - Key Issues Identified")
+    st.info("This word cloud shows the most frequent complaint keywords after removing common stop words")
+    
+    wordcloud_img = analyzer.generate_wordcloud(complaints_df)
+    st.image(wordcloud_img, use_column_width=True)
+    
+    # Additional NLP metrics
+    st.subheader("📝 Text Analysis Summary")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        avg_length = complaints_df['Complaint_Text'].str.len().mean()
+        st.metric("Average Complaint Length", f"{avg_length:.0f} characters")
+    
+    with col2:
+        total_words = sum(len(str(text).split()) for text in complaints_df['Complaint_Text'])
+        st.metric("Total Words Analyzed", f"{total_words:,}")
+    
+    with col3:
+        unique_words = len(set(' '.join(complaints_df['Complaint_Text'].astype(str)).lower().split()))
+        st.metric("Unique Words Used", f"{unique_words:,}")
 
 def render_download_section(analyzer, complaints_df):
-    """Render download section with enhanced photo support"""
+    """Render download section"""
     st.header("📥 Download Data")
     
     col1, col2 = st.columns(2)
