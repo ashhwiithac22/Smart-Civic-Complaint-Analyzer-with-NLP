@@ -112,6 +112,6 @@ A comprehensive **AI-powered platform** for citizens to report civic issues with
 
 ## 🚀 Getting Started
 The application is **live and ready to use**:  
-[https://smart-civic-complaint-analyzer-with-nlp.streamlit.app/](https://smart-civic-complaint-analyzer-using-nlp.streamlit.app/)  
+[https://smart-civic-complaint-analyzer-with-nlp.streamlit.app/](https://complaint-analyzer-using-nlp.streamlit.app/)  
 
 No installation required – simply visit the link and start submitting complaints!
